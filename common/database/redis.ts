@@ -1,13 +1,12 @@
 import logger from '@common/util/logger';
-import { config } from '../config/config';
 import type { RedisClientType } from 'redis';
 import { createClient } from 'redis';
+import { config } from '../config/config';
 
+export let redisClient: RedisClientType | null;
 
-export let redisClient: RedisClientType;
-
-export async function initializeRedis(){
-    if(!config.redis.enable){
+export async function initializeRedis() {
+    if (!config.redis.enable) {
         return;
     }
     redisClient = createClient({
@@ -15,13 +14,22 @@ export async function initializeRedis(){
             host: config.redis.host,
             port: config.redis.port,
         },
-        password: config.redis.password,
-        username: config.redis.username,
+        ...(config.redis.password && config.redis.username
+            ? {
+                  username: config.redis.username,
+                  password: config.redis.password,
+              }
+            : {}),
     });
 
-    await redisClient.connect()
-    .then(() => {
-        logger.log('Redis connected');
-        // Any other initialization
-    })
+    await redisClient
+        .connect()
+        .then(() => {
+            logger.log('Redis connected');
+            // Any other initialization
+        })
+        .catch((err) => {
+            logger.error('Redis connection error:', err);
+            redisClient = null;
+        });
 }

@@ -1,0 +1,87 @@
+name: Build & Publish Docker Image
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [live, pre-release, test]
+  workflow_dispatch:
+    inputs:
+      release_branch:
+        description: 'Release branch (live, pre-release)'
+        required: true
+        default: 'live'
+        type: choice
+        options:
+          - live
+          - pre-release
+
+jobs: 
+  builds:
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps: 
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.Js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Project
+        run: npm run build
+
+      - name: Extract version
+        id: pkg
+        run: echo "VERSION=$(jq -r .version package.json)" >> $GITHUB_ENV
+
+      - name: Create release tag
+        id: release
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "RELEASE_TAG=${{ github.event.inputs.release_branch }}" >> $GITHUB_ENV
+          else
+            echo "RELEASE_TAG=${{ github.event.pull_request.base.ref }}" >> $GITHUB_ENV
+          fi
+
+      - name: Login to github container registry
+        uses: docker/login-action@v3
+        with: 
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare image tags
+        id: tags
+        run: |
+          IMAGE=ghcr.io/duox731/ts-base
+          TAGS="$IMAGE:${VERSION}-${RELEASE_TAG}\n$IMAGE:${RELEASE_TAG}"
+          if [ "$RELEASE_TAG" = "live" ]; then
+            TAGS="$TAGS\n$IMAGE:latest"
+          fi
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build & Push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
+
+      - name: Deploy to Coolify (if live)
+        if: github.base_ref == 'live'
+        run: |
+          curl --request GET "${{ secrets.COOLIFY_WEBHOOK }}" --header "Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}"
